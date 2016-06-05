@@ -26,7 +26,7 @@ int main(int argc, char* argv[]) {
 
     // if no direction specified or invalid arguments
     if (!valid || !dirSet) {
-        std::cout << "Usage: i3-ws --ws (prev|next)" << std::endl;
+        std::cout << "Usage: i3-ws [--ws] (prev|next)" << std::endl;
         return -1;
     }
 
@@ -35,7 +35,7 @@ int main(int argc, char* argv[]) {
 
     // get active outputs
     auto outputs = i3.get_outputs();
-	std::vector< std::shared_ptr<i3ipc::output_t> > active(outputs.size());
+    std::vector< std::shared_ptr<i3ipc::output_t> > active(outputs.size());
 
     auto it = std::copy_if(outputs.begin(), outputs.end(), active.begin(), [](auto output){ return output->active; });
     active.resize(std::distance(active.begin(), it));
