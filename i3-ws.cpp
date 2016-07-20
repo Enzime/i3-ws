@@ -10,6 +10,7 @@ int main(int argc, char* argv[]) {
     bool prev = false;
     bool valid = true;
     bool dirSet = false;
+    bool loop = false;
     std::string mode = "out";
 
     for (auto it = args.begin(); it != args.end() && valid; ++it) {
@@ -20,13 +21,15 @@ int main(int argc, char* argv[]) {
             dirSet = true;
         else if (*it == "--ws")
             mode = "ws";
+        else if (*it == "--loop")
+            loop = true;
         else
             valid = false;
     }
 
     // if no direction specified or invalid arguments
     if (!valid || !dirSet) {
-        std::cout << "Usage: i3-ws [--ws] (prev|next)" << std::endl;
+        std::cout << "Usage: i3-ws [--ws] [--loop] (prev|next)" << std::endl;
         return -1;
     }
 
@@ -54,14 +57,16 @@ int main(int argc, char* argv[]) {
 
     // switch outputs
     if (active.size() > 1 && mode == "out") {
-        auto n = active[(std::distance(active.begin(), out) + (prev ? 1 : -1) + active.size()) % active.size()];
+        auto active_index = (std::distance(active.begin(), out) + (loop ? (prev ? 1 : -1) : 0) + active.size()) % active.size();
+        auto n = active[active_index];
         std::cout << n->name << std::endl;
         i3.send_command("workspace " + n->current_workspace);
     } else if (current.size() > 1 || mode == "ws") { // switch workspaces
         auto cur = std::find(current.begin(), current.end(), *ws);
         std::cout << (*cur)->name << std::endl;
 
-        auto n = current[(std::distance(current.begin(), cur) + (prev ? -1 : 1) + current.size()) % current.size()];
+        auto current_index = (std::distance(active.begin(), out) + (loop ? (prev ? -1 : 1) : 0) + active.size()) % active.size();
+        auto n = current[current_index];
         std::cout << n->name << std::endl;
         i3.send_command("workspace " + n->name);
     }
