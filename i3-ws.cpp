@@ -3,6 +3,10 @@
 #include <iostream>
 #include <algorithm>
 
+typedef std::vector< std::shared_ptr<i3ipc::output_t> > i3_output_vector;
+typedef std::vector< std::shared_ptr<i3ipc::workspace_t> > i3_workspace_vector;
+
+
 int main(int argc, char* argv[]) {
     // handle argv
     std::vector<std::string> args(argv + 1, argv + argc);
@@ -38,7 +42,7 @@ int main(int argc, char* argv[]) {
 
     // get active outputs
     auto outputs = i3.get_outputs();
-    std::vector< std::shared_ptr<i3ipc::output_t> > active(outputs.size());
+    i3_output_vector active(outputs.size());
 
     auto it = std::copy_if(outputs.begin(), outputs.end(), active.begin(), [](auto output){ return output->active; });
     active.resize(std::distance(active.begin(), it));
@@ -48,16 +52,29 @@ int main(int argc, char* argv[]) {
     auto ws = std::find_if(workspaces.begin(), workspaces.end(), [](auto workspace){ return workspace->focused; });
 
     // get focused output
-    auto out = std::find_if(active.begin(), active.end(), [ws](auto output){ return output->name == (*ws)->output; });
+    auto current_ouput = std::find_if(active.begin(), active.end(), [ws](auto output){ return output->name == (*ws)->output; });
 
-    std::vector< std::shared_ptr<i3ipc::workspace_t> > current(workspaces.size());
+    i3_workspace_vector current(workspaces.size());
 
-    auto end = std::copy_if(workspaces.begin(), workspaces.end(), current.begin(), [out](auto workspace){ return workspace->output == (*out)->name; });
+    auto end = std::copy_if(workspaces.begin(), workspaces.end(), current.begin(), [current_ouput](auto workspace){ return workspace->output == (*current_ouput)->name; });
     current.resize(std::distance(current.begin(), end));
 
     // switch outputs
     if (active.size() > 1 && mode == "out") {
-        auto active_index = (std::distance(active.begin(), out) + (loop ? (prev ? 1 : -1) : 0) + active.size()) % active.size();
+        std::sort(active.begin(), active.end(), [](auto a, auto b) {
+            return a->rect.x < b->rect.x;
+        });
+
+        auto current_ouput = std::find_if(active.begin(), active.end(), [ws](auto output){ return output->name == (*ws)->output; });
+
+        auto active_index = std::distance(active.begin(), current_ouput) + (prev ? -1 : 1);
+
+        if (loop) {
+            active_index = (active_index + active.size()) % active.size();
+        } else if (active_index < 0 || active_index >= active.size()) {
+            return 0;
+        }
+
         auto n = active[active_index];
         std::cout << n->name << std::endl;
         i3.send_command("workspace " + n->current_workspace);
@@ -65,7 +82,16 @@ int main(int argc, char* argv[]) {
         auto cur = std::find(current.begin(), current.end(), *ws);
         std::cout << (*cur)->name << std::endl;
 
-        auto current_index = (std::distance(active.begin(), out) + (loop ? (prev ? -1 : 1) : 0) + active.size()) % active.size();
+        auto current_index = std::distance(current.begin(), cur) + (prev ? -1 : 1);
+
+        std::cout << "current_index: " << current_index << std::endl;
+
+        if (loop) {
+            current_index = (current_index + current.size()) + current.size();
+        } else if (current_index < 0 || current_index >= current.size()) {
+            return 0;
+        }
+
         auto n = current[current_index];
         std::cout << n->name << std::endl;
         i3.send_command("workspace " + n->name);
