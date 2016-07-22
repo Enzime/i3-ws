@@ -84,10 +84,8 @@ int main(int argc, char* argv[]) {
 
         auto current_index = std::distance(current.begin(), cur) + (prev ? -1 : 1);
 
-        std::cout << "current_index: " << current_index << std::endl;
-
         if (loop) {
-            current_index = (current_index + current.size()) + current.size();
+            current_index = (current_index + current.size()) % current.size();
         } else if (current_index < 0 || current_index >= current.size()) {
             return 0;
         }
