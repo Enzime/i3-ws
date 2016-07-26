@@ -70,6 +70,7 @@ int main(int argc, char* argv[]) {
     bool valid = true;
     bool loop = false;
     bool create = false;
+    bool init = false;
     int pos = 0; // -2 = next, -1 = prev, 0 = unset; 1-based index onwards
     string mode = "out";
 
@@ -87,14 +88,20 @@ int main(int argc, char* argv[]) {
             loop = true;
         else if (*it == "--create")
             create = true;
+        else if (*it == "--init")
+            init = true;
         else
             valid = false;
     }
 
+    if (!init && (!pos || pos > MAX_WORKSPACES_PER_OUTPUT) || init && pos)
+        valid = false;
+
     // if no direction specified or invalid arguments
-    if (!valid || !pos || pos > MAX_WORKSPACES_PER_OUTPUT) {
-        cout << "Usage: i3-ws [--ws] [--loop] (prev|next|{NUMBER})";
-        cout << endl;
+    if (!valid) {
+        cout << "Usage: i3-ws [--init]" << endl;
+        cout << "Usage: i3-ws [--ws] {NUMBER}" << endl;
+        cout << "Usage: i3-ws [--ws] [--loop] (prev|next)" << endl;
         return -1;
     }
 
@@ -144,6 +151,22 @@ int main(int argc, char* argv[]) {
         [current_output](auto workspace) {
             return workspace->output == (*current_output)->name; });
 
+    if (init) {
+        for (auto it = active.begin(); it != active.end(); ++it) {
+            string ws_name;
+            stringstream ss;
+            ss << (distance(active.begin(), it) + 1) * 100 + 1;
+            ss >> ws_name;
+            cout << ws_name << endl;
+            if ((*it)->current_workspace != ws_name) {
+                if ((*it)->current_workspace != (*ws)->name)
+                    i3.send_command("workspace " + (*it)->current_workspace);
+                i3.send_command("workspace " + ws_name);
+            }
+        }
+    }
+
+
     current.resize(distance(current.begin(), end));
 
     // switch outputs
@@ -181,11 +204,7 @@ int main(int argc, char* argv[]) {
         auto cur = find(current.begin(), current.end(), *ws);
         cout << (*cur)->name << endl;
 
-        // cout << pos << endl;
-
         int ws_num = strToInt((*cur)->name) % 100;
-
-        // cout << ws_num << endl;
 
         vector<int> ws_nums;
         vector<int>::iterator new_ws;
@@ -200,38 +219,28 @@ int main(int argc, char* argv[]) {
             // create should affect if you're going to jump to the next ws_num
 
             if (create) {
-                // cout << "create: ";
-                // cout << strToInt((*cur)->name) % 100 << endl;
                 new_ws = ws_nums.begin() + strToInt((*ws)->name) % 100 - 1;
             } else {
                 ws_nums = {};
                 for (auto &ws : current)
                     ws_nums.push_back(strToInt(ws->name) % 100);
 
-                // cout << "no_create: ";
-                // cout << distance(current.begin(), cur) << endl;
                 new_ws = ws_nums.begin() + distance(current.begin(), cur);
             }
-
-            // cout << *new_ws << endl;
         }
 
         // -2 = next, -1 = prev, 0 = unset; 1-based index onwards
         if (pos > 0) {
-            // cout << "hai" << endl;
             // pos starts at 1, but items start from iter+0
             new_ws = ws_nums.begin() + pos - 1;
         }
         else if (pos == -1) {
             // if not first!
             if (new_ws != ws_nums.begin()) {
-                // cout << "A " << *new_ws << endl;
                 new_ws -= 1;
-                // cout << "a " << *new_ws << endl;
             } else if (loop) {
             // this implies *new_ws == ws_nums[0]
                 new_ws = ws_nums.end() - 1;
-                // cout << "b " << *new_ws << endl;
             } else {
                 cout << "At the first workspace, use --loop" << endl;
                 return 0;
@@ -249,8 +258,6 @@ int main(int argc, char* argv[]) {
                 return 0;
             }
         }
-
-        // cout << "a" << *new_ws << endl;
 
         string new_ws_name;
         stringstream new_wss;
