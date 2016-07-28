@@ -71,6 +71,7 @@ int main(int argc, char* argv[]) {
     bool loop = false;
     bool create = false;
     bool init = false;
+    bool shift = false;
     int pos = 0; // -2 = next, -1 = prev, 0 = unset; 1-based index onwards
     string mode = "out";
 
@@ -90,6 +91,8 @@ int main(int argc, char* argv[]) {
             create = true;
         else if (*it == "--init")
             init = true;
+        else if (*it == "--shift")
+            shift = true;
         else
             valid = false;
     }
@@ -100,8 +103,8 @@ int main(int argc, char* argv[]) {
     // if no direction specified or invalid arguments
     if (!valid) {
         cout << "Usage: i3-ws [--init]" << endl;
-        cout << "Usage: i3-ws [--ws] {NUMBER}" << endl;
-        cout << "Usage: i3-ws [--ws] [--loop] (prev|next)" << endl;
+        cout << "Usage: i3-ws [--ws] [--shift] {NUMBER}" << endl;
+        cout << "Usage: i3-ws [--ws] [--shift] [--loop] (prev|next)" << endl;
         return -1;
     }
 
@@ -164,10 +167,16 @@ int main(int argc, char* argv[]) {
                 i3.send_command("workspace " + ws_name);
             }
         }
+
+        return 0;
     }
 
-
     current.resize(distance(current.begin(), end));
+
+    string command = "workspace ";
+
+    if (shift)
+        command = "move window to workspace ";
 
     // switch outputs
     if (active.size() > 1 && mode == "out") {
@@ -198,7 +207,7 @@ int main(int argc, char* argv[]) {
 
         auto n = active[active_index];
         cout << n->name << " " << n->current_workspace << endl;
-        i3.send_command("workspace " + n->current_workspace);
+        i3.send_command(command + n->current_workspace);
     } else if (mode == "ws") {
     // switch (or create) workspasces :)
         auto cur = find(current.begin(), current.end(), *ws);
@@ -267,7 +276,7 @@ int main(int argc, char* argv[]) {
         new_wss >> new_ws_name;
 
         if (new_ws_name != (*cur)->name)
-            i3.send_command("workspace " + new_ws_name);
+            i3.send_command(command + new_ws_name);
     }
 
     return 0;
