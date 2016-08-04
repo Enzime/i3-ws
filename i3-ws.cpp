@@ -208,6 +208,11 @@ int main(int argc, char* argv[]) {
         auto n = active[active_index];
         cout << n->name << " " << n->current_workspace << endl;
         i3.send_command(command + n->current_workspace);
+
+        // if moving a window to a new output, this will be on a visible
+        // workspace, so focus that workspace after moving the window there
+        if (shift)
+            i3.send_command("workspace " + n->current_workspace);
     } else if (mode == "ws") {
     // switch (or create) workspasces :)
         auto cur = find(current.begin(), current.end(), *ws);
