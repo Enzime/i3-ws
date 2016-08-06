@@ -72,6 +72,7 @@ int main(int argc, char* argv[]) {
     bool create = false;
     bool init = false;
     bool shift = false;
+    bool synergy = false;
     int pos = 0; // -2 = next, -1 = prev, 0 = unset; 1-based index onwards
     string mode = "out";
 
@@ -93,6 +94,8 @@ int main(int argc, char* argv[]) {
             init = true;
         else if (*it == "--shift")
             shift = true;
+        else if (*it == "--synergy")
+            synergy = true;
         else
             valid = false;
     }
@@ -100,9 +103,13 @@ int main(int argc, char* argv[]) {
     if (!init && (!pos || pos > MAX_WORKSPACES_PER_OUTPUT) || init && pos)
         valid = false;
 
+    if (synergy && (loop || pos >= 0 || shift))
+        valid = false;
+
     // if no direction specified or invalid arguments
     if (!valid) {
         cout << "Usage: i3-ws [--init]" << endl;
+        cout << "Usage: i3-ws [--synergy] (prev|next)" << endl;
         cout << "Usage: i3-ws [--ws] [--shift] {NUMBER}" << endl;
         cout << "Usage: i3-ws [--ws] [--shift] [--loop] [--create] (prev|next)";
         cout << endl;
@@ -201,6 +208,15 @@ int main(int argc, char* argv[]) {
         if (loop) {
             active_index = (active_index + active.size()) % active.size();
         } else if (active_index < 0 || active_index >= active.size()) {
+            if (!synergy)
+                return 0;
+
+            // just synergy things
+            if (pos == -1)
+                system("xdotool key ctrl+alt+h");
+            else if (pos == -2)
+                system("xdotool key ctrl+alt+l");
+
             return 0;
         }
 
