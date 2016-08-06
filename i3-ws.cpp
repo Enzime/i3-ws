@@ -104,7 +104,8 @@ int main(int argc, char* argv[]) {
     if (!valid) {
         cout << "Usage: i3-ws [--init]" << endl;
         cout << "Usage: i3-ws [--ws] [--shift] {NUMBER}" << endl;
-        cout << "Usage: i3-ws [--ws] [--shift] [--loop] (prev|next)" << endl;
+        cout << "Usage: i3-ws [--ws] [--shift] [--loop] [--create] (prev|next)";
+        cout << endl;
         return -1;
     }
 
