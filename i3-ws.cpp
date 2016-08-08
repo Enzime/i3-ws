@@ -161,10 +161,24 @@ int main(int argc, char* argv[]) {
             stringstream ss;
             ss << (distance(active.begin(), it) + 1) * 100 + 1;
             ss >> ws_name;
-            cout << ws_name << endl;
+
+            // get focused workspace
+            workspaces = i3.get_workspaces();
+            ws = find_if(
+                workspaces.begin(),
+                workspaces.end(),
+                [](auto workspace) {
+                    return workspace->focused; });
+
+            cout << ws_name << " " << (*it)->name << endl;
             if ((*it)->current_workspace != ws_name) {
-                if ((*it)->current_workspace != (*ws)->name)
+                if ((*it)->current_workspace != (*ws)->name) {
+                    cout << "Switching from " << (*ws)->name << endl;
+                    cout << "Switching to " << (*it)->current_workspace << endl;
                     i3.send_command("workspace " + (*it)->current_workspace);
+                }
+
+                cout << "Switching to " << ws_name << endl;
                 i3.send_command("workspace " + ws_name);
             }
         }
