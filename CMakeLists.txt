@@ -13,3 +13,4 @@ link_directories(
 
 add_executable(i3-ws i3-ws.cpp)
 target_link_libraries(i3-ws ${I3IPCpp_LIBRARIES})
+install(TARGETS i3-ws DESTINATION bin)
