@@ -15,7 +15,12 @@
       ];
 
       perSystem =
-        { lib, pkgs, ... }:
+        {
+          config,
+          lib,
+          pkgs,
+          ...
+        }:
         {
           packages.default = pkgs.stdenv.mkDerivation {
             pname = "i3-ws";
@@ -32,6 +37,8 @@
 
             meta.mainProgram = "i3-ws";
           };
+
+          checks.package = config.packages.default;
         };
     };
 }
