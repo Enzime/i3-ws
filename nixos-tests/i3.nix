@@ -58,7 +58,7 @@
         "fake-2": (1024, 768, 800, 600),
         "fake-3": (0, 0, 1024, 768),
     }
-    # i3-ws runs `i3 --get-socketpath`, which needs DISPLAY.
+    # Without I3SOCK, i3-ws runs `i3 --get-socketpath`, which needs DISPLAY.
     ENV = "DISPLAY=:0"
     WINDOW = "xterm -T {title} -e sleep infinity"
 
@@ -87,10 +87,17 @@
     run_scenarios()
 
     with subtest("i3-ws without DISPLAY"):
-        # `i3 --get-socketpath` fails, and i3ipc++ throws an exception that
-        # nothing catches.
-        _, stderr = i3_ws("--ws", "1", env="", status=134)
-        assert "terminate called" in stderr, stderr
+        _, stderr = i3_ws("--ws", "1", env="", status=1)
+        assert stderr.startswith("i3-ws: "), stderr
+        assert "`i3 --get-socketpath` failed" in stderr, stderr
         check("210")
+
+    with subtest("I3SOCK"):
+        i3_ws("--ws", "5", env="I3SOCK=/run/i3/ipc.sock")
+        check("205")
+        # I3SOCK takes precedence over `i3 --get-socketpath`.
+        _, stderr = i3_ws("--ws", "6", env="DISPLAY=:0 I3SOCK=/nonexistent", status=1)
+        assert "cannot connect to /nonexistent" in stderr, stderr
+        check("205")
   '';
 }

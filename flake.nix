@@ -1,6 +1,4 @@
 {
-  inputs.self.submodules = true;
-
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
   inputs.flake-parts.url = "github:hercules-ci/flake-parts";
@@ -15,28 +13,9 @@
       ];
 
       perSystem =
+        { config, pkgs, ... }:
         {
-          config,
-          lib,
-          pkgs,
-          ...
-        }:
-        {
-          packages.default = pkgs.stdenv.mkDerivation {
-            pname = "i3-ws";
-            version = inputs.self.shortRev or inputs.self.dirtyShortRev;
-
-            src = inputs.self;
-
-            buildInputs = builtins.attrValues { inherit (pkgs) i3 jsoncpp libsigcxx_2_0; };
-
-            nativeBuildInputs = builtins.attrValues { inherit (pkgs) cmake pkg-config; };
-
-            # Both `CMakeLists.txt` files declare a minimum below 3.5, which CMake 4 rejects
-            cmakeFlags = [ (lib.cmakeFeature "CMAKE_POLICY_VERSION_MINIMUM" "3.5") ];
-
-            meta.mainProgram = "i3-ws";
-          };
+          packages.default = pkgs.callPackage ./package.nix { };
 
           checks.package = config.packages.default;
 
