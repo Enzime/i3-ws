@@ -2,7 +2,7 @@
 name = "i3-ws"
 version = "0.1.0"
 edition = "2024"
-description = "Per-monitor workspaces for i3"
+description = "Per-monitor workspaces for i3 and sway"
 publish = false
 
 [dependencies]
