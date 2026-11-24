@@ -39,6 +39,11 @@
           };
 
           checks.package = config.packages.default;
+
+          checks.vm-i3 = pkgs.testers.runNixOSTest {
+            imports = [ ./nixos-tests/i3.nix ];
+            node.specialArgs.i3-ws = config.packages.default;
+          };
         };
     };
 }
