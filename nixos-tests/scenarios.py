@@ -240,18 +240,28 @@ def run_scenarios() -> None:
 
     with subtest("commands the window manager rejects"):
         # 104 is empty, so there is no window to move.
-        i3_ws("--ws", "--shift", "2")
+        _, stderr = i3_ws("--ws", "--shift", "2", status=1)
+        assert 'i3-ws: command "move window to workspace 102" failed' in stderr, stderr
         check("104")
         assert "102" not in workspaces(), workspaces()
         # The focus still follows to output 2.
-        i3_ws("--shift", "2")
+        _, stderr = i3_ws("--shift", "2", status=1)
+        assert 'i3-ws: command "move window to workspace 203" failed' in stderr, stderr
         check("203", ["104", "203", "301", "401"])
 
     with subtest("workspaces outside N01 to N10"):
+        error = "i3-ws: the focused workspace {} is not one of this tool's workspaces"
         ipc("command", "workspace mail")
-        # "mail" counts as workspace 0.
+        # "mail" counts as workspace 0, one before the first.
+        _, stderr = i3_ws("--ws", "--create", "prev", status=1)
+        assert error.format('"mail"') in stderr, stderr
+        check("mail")
         i3_ws("--ws", "--create", "next")
         check("201")
         ipc("command", "workspace 211")
+        # "211" counts as workspace 11, one past the last.
+        _, stderr = i3_ws("--ws", "--create", "next", status=1)
+        assert error.format('"211"') in stderr, stderr
+        check("211")
         i3_ws("--ws", "--create", "prev")
         check("210", ["104", "210", "301", "401"])
