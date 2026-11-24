@@ -23,6 +23,11 @@
             imports = [ ./nixos-tests/i3.nix ];
             node.specialArgs.i3-ws = config.packages.default;
           };
+
+          checks.vm-sway = pkgs.testers.runNixOSTest {
+            imports = [ ./nixos-tests/sway.nix ];
+            node.specialArgs.i3-ws = config.packages.default;
+          };
         };
     };
 }

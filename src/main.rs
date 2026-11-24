@@ -1,4 +1,4 @@
-//! Per-monitor workspaces for i3.
+//! Per-monitor workspaces for i3 and sway.
 
 mod cli;
 mod ipc;

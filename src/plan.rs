@@ -112,17 +112,18 @@ pub fn plan(args: &Args, outputs: &[Output], workspaces: &[Workspace]) -> Result
         create,
     } = args
     else {
-        return Ok(Plan::Init(
-            active
-                .iter()
-                .enumerate()
-                .map(|(i, o)| InitTarget {
+        return active
+            .iter()
+            .enumerate()
+            .map(|(i, o)| {
+                Ok(InitTarget {
                     output: o.name.clone(),
-                    current_workspace: o.current_workspace.clone().unwrap_or_default(),
+                    current_workspace: current_workspace(o)?.to_owned(),
                     workspace: workspace_name(i, 1),
                 })
-                .collect(),
-        ));
+            })
+            .collect::<Result<_, _>>()
+            .map(Plan::Init);
     };
 
     let command = if shift {
@@ -133,7 +134,7 @@ pub fn plan(args: &Args, outputs: &[Output], workspaces: &[Workspace]) -> Result
 
     let actions = match mode {
         Mode::Output if active.len() > 1 => {
-            switch_output(&active, output_index, target, shift, wrap, command)
+            switch_output(&active, output_index, target, shift, wrap, command)?
         }
         Mode::Output => Vec::new(),
         Mode::Workspace => switch_workspace(
@@ -157,7 +158,7 @@ fn switch_output(
     shift: bool,
     wrap: bool,
     command: &str,
-) -> Vec<Action> {
+) -> Result<Vec<Action>, String> {
     let len = active.len() as i64;
     let current = output_index as i64;
 
@@ -165,17 +166,17 @@ fn switch_output(
         Target::Number(n) if i64::from(n) - 1 != current => i64::from(n) - 1,
         Target::Prev => current - 1,
         Target::Next => current + 1,
-        Target::Number(_) => return Vec::new(),
+        Target::Number(_) => return Ok(Vec::new()),
     };
 
     if wrap {
         index = index.rem_euclid(len);
     } else if !(0..len).contains(&index) {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let output = active[index as usize];
-    let workspace = output.current_workspace.as_deref().unwrap_or_default();
+    let workspace = current_workspace(output)?;
 
     let mut actions = vec![
         Action::Print(index.to_string()),
@@ -187,7 +188,17 @@ fn switch_output(
     if shift {
         actions.push(Action::Command(format!("workspace {workspace}")));
     }
-    actions
+    Ok(actions)
+}
+
+/// The workspace visible on an active output. i3 and sway only report `null`
+/// for inactive outputs, so this shouldn't fail; the C++ version would have
+/// sent a command with an empty workspace name instead.
+fn current_workspace(output: &Output) -> Result<&str, String> {
+    output
+        .current_workspace
+        .as_deref()
+        .ok_or_else(|| format!("output {:?} has no current workspace", output.name))
 }
 
 fn switch_workspace(
@@ -721,5 +732,170 @@ mod tests {
         let args = cli::parse(["--ws", "next"]).unwrap();
         let error = plan(&args, &outputs(), &workspaces).unwrap_err();
         assert!(error.contains("not on an active output"), "{error}");
+    }
+}
+
+#[cfg(test)]
+mod sway_tests {
+    use super::*;
+    use crate::cli;
+
+    /// A GET_OUTPUTS reply in sway's format: an enabled output left of the
+    /// origin, a disabled output and a non-desktop output (which has no
+    /// `active`, `rect` or `current_workspace` keys).
+    const OUTPUTS: &str = r#"[
+        {
+            "id": 4, "type": "output", "name": "DP-1", "make": "Dell",
+            "model": "U2720Q", "serial": "ABC", "active": true, "dpms": true,
+            "power": true, "primary": false, "scale": 1.5,
+            "transform": "normal", "current_workspace": "205",
+            "modes": [], "current_mode": {"width": 3840, "height": 2160, "refresh": 60000},
+            "rect": {"x": 0, "y": 0, "width": 2560, "height": 1440},
+            "focused": true, "non_desktop": false
+        },
+        {
+            "id": 5, "type": "output", "name": "eDP-1", "active": true,
+            "primary": false, "current_workspace": "101",
+            "rect": {"x": -1920, "y": 360, "width": 1920, "height": 1200},
+            "focused": false, "non_desktop": false
+        },
+        {
+            "type": "output", "name": "HDMI-A-1", "active": false,
+            "dpms": false, "power": false, "primary": false, "percent": null,
+            "current_workspace": null,
+            "rect": {"x": 0, "y": 0, "width": 0, "height": 0},
+            "non_desktop": false
+        },
+        {
+            "type": "output", "name": "HMD-1", "make": "Valve",
+            "model": "Index", "serial": "", "non_desktop": true,
+            "modes": [], "features": {}, "primary": false
+        }
+    ]"#;
+
+    fn workspace_json(name: &str, output: &str, focused: bool) -> String {
+        format!(
+            r#"{{
+                "id": 10, "type": "workspace", "num": {name}, "name": "{name}",
+                "output": "{output}", "focused": {focused}, "visible": true,
+                "urgent": false, "representation": "H[foot]",
+                "layout": "splith", "orientation": "horizontal",
+                "rect": {{"x": 0, "y": 0, "width": 1920, "height": 1200}},
+                "floating_nodes": [], "nodes": [], "focus": []
+            }}"#
+        )
+    }
+
+    fn workspaces(focused: &str) -> Vec<Workspace> {
+        let entries: Vec<String> = [("101", "eDP-1"), ("205", "DP-1"), ("207", "DP-1")]
+            .iter()
+            .map(|&(name, output)| workspace_json(name, output, name == focused))
+            .collect();
+        serde_json::from_str(&format!("[{}]", entries.join(","))).unwrap()
+    }
+
+    fn outputs() -> Vec<Output> {
+        serde_json::from_str(OUTPUTS).unwrap()
+    }
+
+    fn commands(args: &[&str], outputs: &[Output], focused: &str) -> Result<Vec<String>, String> {
+        let args = cli::parse(args).unwrap();
+        match plan(&args, outputs, &workspaces(focused))? {
+            Plan::Actions(actions) => Ok(actions
+                .into_iter()
+                .filter_map(|a| match a {
+                    Action::Command(c) => Some(c),
+                    Action::Print(_) => None,
+                })
+                .collect()),
+            Plan::Init(targets) => Ok(targets
+                .iter()
+                .map(|t| format!("{} {} {}", t.output, t.current_workspace, t.workspace))
+                .collect()),
+        }
+    }
+
+    #[test]
+    fn parses_sway_outputs() {
+        let outputs = outputs();
+        assert_eq!(outputs.len(), 4);
+        assert_eq!(outputs[2].current_workspace, None);
+        assert!(!outputs[3].active);
+        assert_eq!(outputs[3].current_workspace, None);
+        assert_eq!(outputs[3].rect, Rect::default());
+    }
+
+    #[test]
+    fn only_enabled_outputs_are_numbered_and_negative_positions_sort_first() {
+        let outputs = outputs();
+        let names: Vec<&str> = active_outputs(&outputs)
+            .iter()
+            .map(|o| o.name.as_str())
+            .collect();
+        assert_eq!(names, ["eDP-1", "DP-1"]);
+    }
+
+    #[test]
+    fn switches_outputs() {
+        let outputs = outputs();
+        assert_eq!(
+            commands(&["prev"], &outputs, "205").unwrap(),
+            ["workspace 101"]
+        );
+        assert_eq!(
+            commands(&["next"], &outputs, "205").unwrap(),
+            [] as [&str; 0]
+        );
+        assert_eq!(
+            commands(&["2"], &outputs, "101").unwrap(),
+            ["workspace 205"]
+        );
+        // There is no third output: the disabled and non-desktop ones don't count.
+        assert_eq!(commands(&["3"], &outputs, "101").unwrap(), [] as [&str; 0]);
+    }
+
+    #[test]
+    fn switches_workspaces() {
+        let outputs = outputs();
+        assert_eq!(
+            commands(&["--ws", "3"], &outputs, "205").unwrap(),
+            ["workspace 203"]
+        );
+        assert_eq!(
+            commands(&["--ws", "next"], &outputs, "205").unwrap(),
+            ["workspace 207"]
+        );
+        assert_eq!(
+            commands(&["--ws", "--shift", "2"], &outputs, "101").unwrap(),
+            ["move window to workspace 102"]
+        );
+    }
+
+    #[test]
+    fn init() {
+        assert_eq!(
+            commands(&["--init"], &outputs(), "205").unwrap(),
+            ["eDP-1 101 101", "DP-1 205 201"]
+        );
+    }
+
+    #[test]
+    fn active_output_without_a_current_workspace() {
+        let mut outputs = outputs();
+        outputs[1].current_workspace = None;
+        // Targeting it is an error instead of sending `workspace ` with no name.
+        let error = commands(&["prev"], &outputs, "205").unwrap_err();
+        assert_eq!(error, r#"output "eDP-1" has no current workspace"#);
+        let error = commands(&["--init"], &outputs, "205").unwrap_err();
+        assert_eq!(error, r#"output "eDP-1" has no current workspace"#);
+        // Anything that doesn't need it still works.
+        assert_eq!(
+            commands(&["--ws", "next"], &outputs, "205").unwrap(),
+            ["workspace 207"]
+        );
+        assert_eq!(
+            commands(&["next"], &outputs, "101").unwrap(),
+            ["workspace 205"]
+        );
     }
 }

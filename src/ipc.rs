@@ -1,7 +1,9 @@
-//! A minimal client for the i3 IPC protocol: a 14-byte header (`"i3-ipc"`,
-//! payload length, message type; both integers in native byte order)
-//! followed by the payload. Requests and replies use the same framing.
+//! A minimal client for the i3 IPC protocol, which sway speaks too: a
+//! 14-byte header (`"i3-ipc"`, payload length, message type; both integers
+//! in native byte order) followed by the payload. Requests and replies use
+//! the same framing.
 
+use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -19,23 +21,42 @@ const RUN_COMMAND: u32 = 0;
 const GET_WORKSPACES: u32 = 1;
 const GET_OUTPUTS: u32 = 3;
 
-/// Finds the IPC socket: `$I3SOCK` if set, else `i3 --get-socketpath`.
+/// Finds the IPC socket of the running sway or i3: `$SWAYSOCK`, then
+/// `$I3SOCK`, then `i3 --get-socketpath`.
 pub fn socket_path() -> Result<PathBuf, String> {
-    if let Some(path) = std::env::var_os("I3SOCK").filter(|p| !p.is_empty()) {
-        return Ok(path.into());
+    if let Some(path) = socket_from_env(std::env::var_os) {
+        return Ok(path);
     }
+    i3_socket_path().map_err(|e| {
+        format!("no i3 or sway IPC socket found: SWAYSOCK and I3SOCK are unset and {e}")
+    })
+}
 
+/// The socket named by the environment, if any. Empty values count as unset.
+///
+/// sway sets both variables to the same path for every process it starts.
+/// i3 sets only `$I3SOCK`, and only for processes it starts with `exec`.
+/// Only sway sets `$SWAYSOCK`, so it is checked first, like `swaymsg` does.
+fn socket_from_env(var: impl Fn(&'static str) -> Option<OsString>) -> Option<PathBuf> {
+    ["SWAYSOCK", "I3SOCK"]
+        .into_iter()
+        .filter_map(var)
+        .find(|path| !path.is_empty())
+        .map(PathBuf::from)
+}
+
+/// Asks i3 for its socket, which it reads from the X11 root window, so this
+/// needs `$DISPLAY`. There is no sway equivalent: `sway --get-socketpath`
+/// only prints `$SWAYSOCK`, which has already been checked.
+fn i3_socket_path() -> Result<PathBuf, String> {
     let output = Command::new("i3")
         .arg("--get-socketpath")
         .output()
-        .map_err(|e| format!("I3SOCK is not set and running `i3 --get-socketpath` failed: {e}"))?;
+        .map_err(|e| format!("running `i3 --get-socketpath` failed: {e}"))?;
     let path = String::from_utf8_lossy(&output.stdout);
     let path = path.trim_end_matches('\n');
     if !output.status.success() || path.is_empty() {
-        return Err(format!(
-            "I3SOCK is not set and `i3 --get-socketpath` failed ({})",
-            output.status
-        ));
+        return Err(format!("`i3 --get-socketpath` failed ({})", output.status));
     }
     Ok(path.into())
 }
@@ -109,5 +130,39 @@ impl Connection {
         let mut reply = vec![0; length as usize];
         self.stream.read_exact(&mut reply)?;
         Ok(reply)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
+        let vars: Vec<(String, OsString)> = vars
+            .iter()
+            .map(|&(k, v)| (k.to_owned(), v.into()))
+            .collect();
+        move |name| vars.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
+    }
+
+    #[test]
+    fn swaysock_takes_precedence_over_i3sock() {
+        let var = env(&[("I3SOCK", "/run/i3"), ("SWAYSOCK", "/run/sway")]);
+        assert_eq!(socket_from_env(var), Some("/run/sway".into()));
+    }
+
+    #[test]
+    fn i3sock_is_used_without_swaysock() {
+        let var = env(&[("I3SOCK", "/run/i3")]);
+        assert_eq!(socket_from_env(var), Some("/run/i3".into()));
+    }
+
+    #[test]
+    fn empty_variables_count_as_unset() {
+        let var = env(&[("SWAYSOCK", ""), ("I3SOCK", "/run/i3")]);
+        assert_eq!(socket_from_env(var), Some("/run/i3".into()));
+        let var = env(&[("SWAYSOCK", ""), ("I3SOCK", "")]);
+        assert_eq!(socket_from_env(var), None);
+        assert_eq!(socket_from_env(env(&[])), None);
     }
 }

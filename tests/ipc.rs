@@ -1,6 +1,7 @@
 //! Runs the real binary against a fake window manager listening on a Unix
 //! socket and checks the exact IPC messages it sends.
 
+use std::ffi::OsString;
 use std::io::{ErrorKind, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -22,8 +23,10 @@ struct FakeWm {
     /// (name, output)
     workspaces: Vec<(String, &'static str)>,
     focused: String,
-    /// Reply to `move` commands like i3 does on an empty workspace.
+    /// Reply to `move` commands like on an empty workspace.
     reject_moves: bool,
+    /// Reply in sway's format instead of i3's.
+    sway: bool,
 }
 
 impl FakeWm {
@@ -39,6 +42,7 @@ impl FakeWm {
                 .collect(),
             focused: focused.to_owned(),
             reject_moves: false,
+            sway: false,
         }
     }
 
@@ -55,6 +59,9 @@ impl FakeWm {
     }
 
     fn outputs_json(&self) -> Value {
+        if self.sway {
+            return self.sway_outputs_json();
+        }
         let mut outputs = vec![json!({
             "name": "xroot-0",
             "active": false,
@@ -74,11 +81,73 @@ impl FakeWm {
         Value::Array(outputs)
     }
 
+    /// sway lists enabled outputs (with many extra keys), then disabled ones,
+    /// then non-desktop ones, which lack `active`, `rect` and
+    /// `current_workspace`.
+    fn sway_outputs_json(&self) -> Value {
+        let focused_output = self.focused_output();
+        let mut outputs: Vec<Value> = self
+            .outputs
+            .iter()
+            .enumerate()
+            .map(|(id, (name, x, ws))| {
+                json!({
+                    "id": id + 3,
+                    "type": "output",
+                    "name": name,
+                    "make": "Unknown",
+                    "model": "Unknown",
+                    "serial": "Unknown",
+                    "active": true,
+                    "dpms": true,
+                    "power": true,
+                    "primary": false,
+                    "scale": 1.5,
+                    "transform": "normal",
+                    "current_workspace": ws,
+                    "modes": [],
+                    "current_mode": {"width": 2880, "height": 1620, "refresh": 60000},
+                    "rect": {"x": x, "y": 0, "width": 1920, "height": 1080},
+                    "focused": *name == focused_output,
+                    "non_desktop": false,
+                })
+            })
+            .collect();
+        outputs.push(json!({
+            "type": "output",
+            "name": "HDMI-A-9",
+            "make": "Unknown",
+            "model": "Unknown",
+            "serial": "Unknown",
+            "active": false,
+            "dpms": false,
+            "power": false,
+            "primary": false,
+            "current_workspace": null,
+            "modes": [],
+            "rect": {"x": 0, "y": 0, "width": 0, "height": 0},
+            "percent": null,
+            "non_desktop": false,
+        }));
+        outputs.push(json!({
+            "type": "output",
+            "name": "HMD-1",
+            "make": "Valve",
+            "model": "Index",
+            "serial": "",
+            "non_desktop": true,
+            "modes": [],
+            "features": {},
+            "primary": false,
+        }));
+        Value::Array(outputs)
+    }
+
     fn workspaces_json(&self) -> Value {
         self.workspaces
             .iter()
             .map(|(name, output)| {
-                json!({
+                let mut workspace = json!({
                     "num": name.parse::<i64>().unwrap_or(-1),
                     "name": name,
                     "visible": self.outputs.iter().any(|(_, _, ws)| ws == name),
@@ -86,7 +155,23 @@ impl FakeWm {
                     "urgent": false,
                     "rect": {"x": 0, "y": 0, "width": 1920, "height": 1080},
                     "output": output,
-                })
+                });
+                if self.sway {
+                    let extra = json!({
+                        "id": 10,
+                        "type": "workspace",
+                        "representation": "H[foot]",
+                        "layout": "splith",
+                        "orientation": "horizontal",
+                        "floating_nodes": [],
+                        "nodes": [],
+                        "focus": [],
+                    });
+                    for (key, value) in extra.as_object().unwrap() {
+                        workspace[key] = value.clone();
+                    }
+                }
+                workspace
             })
             .collect()
     }
@@ -110,7 +195,12 @@ impl FakeWm {
             json!([{"success": true}])
         } else if let Some(name) = command.strip_prefix("move window to workspace ") {
             if self.reject_moves {
-                return json!([{"success": false, "error": "Nothing to move: workspace empty"}]);
+                let error = if self.sway {
+                    "Can't move an empty workspace"
+                } else {
+                    "Nothing to move: workspace empty"
+                };
+                return json!([{"success": false, "error": error}]);
             }
             if !self.workspaces.iter().any(|(ws, _)| ws == name) {
                 let output = self.focused_output();
@@ -196,22 +286,34 @@ impl Run {
     }
 }
 
-fn i3_ws(socket: &Path, args: &[&str]) -> Output {
+/// Runs the binary with the socket variables cleared, then `env` set.
+fn i3_ws(args: &[&str], env: &[(&str, OsString)]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_i3-ws"))
         .args(args)
-        .env("I3SOCK", socket)
         .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .envs(env.iter().map(|(k, v)| (k, v)))
         .output()
         .unwrap()
 }
 
+/// Runs the binary against `wm`, passing the socket in `I3SOCK`.
 fn run(wm: FakeWm, args: &[&str]) -> Run {
+    run_with_env(wm, args, |socket| vec![("I3SOCK", socket.into())])
+}
+
+/// Runs the binary against `wm` with the environment `env(socket)`.
+fn run_with_env(
+    wm: FakeWm,
+    args: &[&str],
+    env: impl FnOnce(&Path) -> Vec<(&'static str, OsString)>,
+) -> Run {
     let path = socket_path();
     let _ = std::fs::remove_file(&path);
     let listener = UnixListener::bind(&path).unwrap();
     let server: JoinHandle<Requests> = thread::spawn(move || serve(listener, wm));
 
-    let output = i3_ws(&path, args);
+    let output = i3_ws(args, &env(&path));
     // Unblock the server if the binary never connected.
     drop(UnixStream::connect(&path));
     let requests = server.join().unwrap();
@@ -342,9 +444,9 @@ fn fails_without_a_focused_workspace() {
 
 #[test]
 fn prints_usage_for_invalid_arguments() {
-    let path = socket_path();
+    let env = [("I3SOCK", socket_path().into())];
     for args in [&[][..], &["11"], &["--init", "1"], &["next", "--bogus"]] {
-        let output = i3_ws(&path, args);
+        let output = i3_ws(args, &env);
         assert_eq!(output.status.code(), Some(255), "{args:?}");
         assert_eq!(
             std::str::from_utf8(&output.stdout).unwrap(),
@@ -357,9 +459,100 @@ fn prints_usage_for_invalid_arguments() {
 
 #[test]
 fn fails_when_the_socket_is_missing() {
-    let path = socket_path();
-    let output = i3_ws(&path, &["next"]);
+    let output = i3_ws(&["next"], &[("I3SOCK", socket_path().into())]);
     assert_eq!(output.status.code(), Some(1));
     let stderr = std::str::from_utf8(&output.stderr).unwrap();
     assert!(stderr.starts_with("i3-ws: cannot connect to "), "{stderr}");
+}
+
+/// sway with a laptop panel left of the origin, plus a disabled and a
+/// non-desktop output that must be ignored.
+fn sway(focused: &str) -> FakeWm {
+    let mut wm = FakeWm::new(&[("DP-1", 0, "205"), ("eDP-1", -1920, "101")], focused)
+        .with_workspace("207", "DP-1");
+    wm.sway = true;
+    wm
+}
+
+#[test]
+fn sway_prefers_swaysock() {
+    let run = run_with_env(sway("205"), &["prev"], |socket| {
+        vec![
+            ("SWAYSOCK", socket.into()),
+            ("I3SOCK", "/nonexistent/i3-ws-test.sock".into()),
+        ]
+    });
+    assert!(run.output.status.success(), "{}", run.stderr());
+    assert_eq!(run.commands(), ["workspace 101"]);
+    assert_eq!(run.stdout(), "0\neDP-1 101\n");
+}
+
+#[test]
+fn sway_ignores_disabled_and_non_desktop_outputs() {
+    // There are only two enabled outputs, so there is nothing after DP-1.
+    let next = run_with_env(sway("205"), &["next"], |s| vec![("SWAYSOCK", s.into())]);
+    assert!(next.output.status.success(), "{}", next.stderr());
+    assert_eq!(next.commands(), [] as [&str; 0]);
+
+    let wrapped = run_with_env(sway("205"), &["--loop", "--shift", "next"], |s| {
+        vec![("SWAYSOCK", s.into())]
+    });
+    assert!(wrapped.output.status.success(), "{}", wrapped.stderr());
+    assert_eq!(
+        wrapped.commands(),
+        ["move window to workspace 101", "workspace 101"]
+    );
+}
+
+#[test]
+fn sway_workspaces_and_init() {
+    let ws = run_with_env(sway("205"), &["--ws", "next"], |s| {
+        vec![("SWAYSOCK", s.into())]
+    });
+    assert!(ws.output.status.success(), "{}", ws.stderr());
+    assert_eq!(ws.commands(), ["workspace 207"]);
+
+    let init = run_with_env(sway("205"), &["--init"], |s| vec![("SWAYSOCK", s.into())]);
+    assert!(init.output.status.success(), "{}", init.stderr());
+    assert_eq!(init.commands(), ["workspace 201"]);
+}
+
+#[test]
+fn sway_rejected_move_is_reported() {
+    let mut wm = sway("205");
+    wm.reject_moves = true;
+    let run = run_with_env(wm, &["--ws", "--shift", "3"], |s| {
+        vec![("SWAYSOCK", s.into())]
+    });
+    assert_eq!(run.output.status.code(), Some(1));
+    assert_eq!(run.commands(), ["move window to workspace 203"]);
+    assert_eq!(
+        run.stderr(),
+        "i3-ws: command \"move window to workspace 203\" failed: \
+         Can't move an empty workspace\n"
+    );
+}
+
+#[test]
+fn empty_swaysock_falls_back_to_i3sock() {
+    let run = run_with_env(two_outputs("101"), &["next"], |socket| {
+        vec![("SWAYSOCK", "".into()), ("I3SOCK", socket.into())]
+    });
+    assert!(run.output.status.success(), "{}", run.stderr());
+    assert_eq!(run.commands(), ["workspace 205"]);
+}
+
+#[test]
+fn fails_clearly_without_any_socket() {
+    // Neither variable is set and there is no `i3` to ask.
+    let output = i3_ws(&["next"], &[("PATH", "/nonexistent/i3-ws-test".into())]);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = std::str::from_utf8(&output.stderr).unwrap();
+    assert!(
+        stderr.starts_with(
+            "i3-ws: no i3 or sway IPC socket found: SWAYSOCK and I3SOCK are unset and \
+             running `i3 --get-socketpath` failed: "
+        ),
+        "{stderr}"
+    );
 }
